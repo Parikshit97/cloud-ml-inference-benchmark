@@ -1,120 +1,70 @@
 # Cloud ML Inference Benchmark
 
-**Containerized vs Serverless Deployments for ResNet-18: Solving the Scaling Paradox for Compute-Heavy ML Workloads**
+A comparative study of ResNet-18 inference deployments across Google Cloud Run, Google Kubernetes Engine, and a hybrid architecture. A Rust coordinator routes requests to a Python gRPC inference service; a background training service updates model artifacts.
 
-Standard ML deployments often couple inference and training, leading to resource contention. This project evaluates a system designed to prioritize inference speed while allowing background model evolution through asynchronous training and gRPC communication.
+Developed collaboratively for SFU CMPT 756. The repository retains the team’s original Git history and upstream relationship. Contribution examples include [coordinator tracing](https://github.com/Parikshit97/cloud-ml-inference-benchmark/commit/7ab8990), [Python service instrumentation](https://github.com/Parikshit97/cloud-ml-inference-benchmark/commit/f229057), and [GKE tracing deployment](https://github.com/Parikshit97/cloud-ml-inference-benchmark/commit/92a0f7f).
 
-![CMPT 756](https://img.shields.io/badge/CMPT-756-blue?style=flat)
-![SFU Project](https://img.shields.io/badge/SFU-Project-red?style=flat)
+## Architecture
 
-**[Live Web Application Demo](https://frontend-254882982092.us-central1.run.app/)**
+| Component | Responsibility |
+|---|---|
+| `coordinator/` | Rust HTTP API, gRPC routing, training uploads, OpenTelemetry |
+| `ml-grpc-service/` | Python model inference and model reloads |
+| `training-service/` | Background training and model artifact updates |
+| `infra/inference/` | Terraform and Kubernetes configuration for the deployment variants |
+| `cloudbuild/` | Container build and deployment pipelines |
+| `k6/` | Load scenarios and recorded request metrics |
+| `frontend/` | React demonstration interface |
 
-## Primary Objective
+## Recorded results
 
-Measure how different cloud abstractions handle the latency and scaling requirements of a real-time inference service versus a secondary background training task.
+The following table is calculated from the committed k6 JSON-lines exports. It is historical evidence, not a new cloud benchmark. Durations are client-side HTTP request durations in milliseconds; failure percentages come from `http_req_failed` samples.
 
-## Core Functionalities
+| Recorded run | Requests | p50 ms | p95 ms | p99 ms | Failed % |
+|---|---:|---:|---:|---:|---:|
+| baseline_cloudrun | 32 | 430.88 | 3682.62 | 7714.83 | 0.00 |
+| baseline_gke | 44 | 315.15 | 482.85 | 680.91 | 0.00 |
+| baseline_hybrid | 41 | 395.37 | 589.26 | 1549.00 | 0.00 |
+| burst_cloudrun | 2301 | 323.86 | 2087.33 | 15445.24 | 0.00 |
+| burst_gke | 2395 | 349.02 | 867.48 | 1261.18 | 0.00 |
+| bust_hybrid | 2394 | 380.95 | 804.23 | 1003.85 | 0.00 |
+| cold_start_cloudrun | 1 | 30351.22 | 30351.22 | 30351.22 | 0.00 |
+| cold_start_gke | 1 | 842.36 | 842.36 | 842.36 | 0.00 |
+| cold_start_hybrid | 1 | 843.99 | 843.99 | 843.99 | 0.00 |
+| gradual_cloudrun | 1234 | 425.34 | 5244.14 | 20608.55 | 0.00 |
+| gradual_gke | 1356 | 350.91 | 960.49 | 1446.75 | 0.52 |
+| gradual_hybrid | 1284 | 389.89 | 1216.35 | 1990.55 | 0.00 |
+| model_swap_gke | 1045 | 294.10 | 416.22 | 643.73 | 0.00 |
 
-Prioritize low-latency inference while enabling continuous model evolution through asynchronous training and gRPC-based communication — solving the "Scaling Paradox" for compute-heavy ML workloads.
 
-- **Rust Coordinator:** Low-latency request routing.
-- **gRPC Inference:** Non-blocking swift prediction cycles.
-- **Async Training:** Fine-tunes on fresh data without interrupting inference.
-- **Auto Model Deploy:** Background detection and seamless model hot-swap.
-- **Full Observability:** OpenTelemetry tracing across service boundaries.
+The cold-start exports contain **one request each**. Their values are observations, not estimates of a latency distribution. File names identify the recorded runs; the exports do not establish that hardware, payloads, scaling settings, and software revisions were identical. The `bust_hybrid` filename is retained from the original artifact. Cost, resource utilization, and confidence intervals are not available in these exports.
 
-## Deployment Variables
+## Reproduce the result summary locally
 
-We are evaluating three primary cloud deployment architectures:
+Python 3.10 or later is sufficient. No cloud account or third-party Python packages are required for this step.
 
-1. **Cloud Run (Serverless / Scale-to-Zero):** Investigating agility and model-loading overhead. All 3 services are deployed on Cloud Run.
-2. **GKE Orchestrated (Warm Pods):** Benchmarking warm-pod consistency and Horizontal Pod Autoscaler (HPA) scaling lag. All 3 services are deployed on GKE.
-3. **Hybrid:** Coordinator hosted on Cloud Run; Inference service hosted on GKE.
-
-## Inference Infrastructure
-
-Terraform starters for the three inference deployment variants are located under:
-
-- [`infra/inference`](./infra/inference/README.md)
-
-Supported variants:
-- `hybrid`
-- `gke`
-- `cloudrun`
-
-## Cloud Build Pipeline
-
-The Cloud Run inference deployment can be driven by Cloud Build using:
-
-- [`cloudbuild/cloudrun.inference.yaml`](./cloudbuild/cloudrun.inference.yaml)
-
-This pipeline performs the following steps:
-1. Builds the coordinator image.
-2. Builds the gRPC model image.
-3. Pushes both images to Artifact Registry.
-4. Runs Terraform for the `cloudrun` inference variant.
-5. Deploys the Cloud Run services and load balancer resources.
-
-## Getting Started
-
-### ML gRPC Service
-
-Navigate to the `ml-grpc-service` directory and set up the environment:
-
-```bash
-cd ml-grpc-service
-
-# Create and activate virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+```sh
+python3 tools/summarize_results.py k6/results
+python3 tools/summarize_results.py k6/results --format json
+python3 -m unittest discover -s tests -v
 ```
 
-Create a `.env` file in the `ml-grpc-service` directory with the following variables:
+The summary command validates JSON records and reports p50/p95/p99, request counts, and failures. JSON output also includes a request rate over the observed request timestamp window; this is not the configured k6 arrival rate.
 
-```env
-GCS_BUCKET=<bucket name>
-GCS_MODEL_PATH=<model path>
-LOCAL_MODEL_PATH=./ml-models/<model name>
+## Run the services
+
+Service setup is documented in [coordinator/README.md](coordinator/README.md), [infra/inference/README.md](infra/inference/README.md), and [k6/README.md](k6/README.md). The inference and training services require their configured GCS model artifacts and cloud credentials. Do not place credentials or Terraform state in Git.
+
+For the frontend:
+
+```sh
+cd frontend
+npm ci
+npm run build
 ```
 
-Run and test the server:
+## Repeat the benchmark
 
-```bash
-# Run the gRPC server
-python run.py
+Use the same model, input images, load script, and workload parameters for each architecture. Record the Git revision, region, instance limits, cold/warm state, and run start/end times. Repeat independent trials before drawing comparative conclusions. Collect billing and monitoring data separately when reporting cost or utilization.
 
-# Test the gRPC server
-python tests/test_client.py
-```
-
-### Frontend
-
-Navigate to the frontend project and start the development server:
-
-```bash
-# Install dependencies
-npm install
-
-# Run the frontend
-npm run dev
-```
-
-### Presentation
-
-<img width="1469" height="827" alt="image" src="https://github.com/user-attachments/assets/3531909f-6147-4156-bdb1-b9acf9d81305" />
-
-<img width="1469" height="827" alt="image" src="https://github.com/user-attachments/assets/78a3543b-c3fa-4012-8b2b-3af415bf3990" />
-
-<img width="1469" height="827" alt="image" src="https://github.com/user-attachments/assets/77f2b5d6-a38e-40da-9ca4-a98323abb5a5" />
-
-<img width="1469" height="827" alt="image" src="https://github.com/user-attachments/assets/9cce8bbd-61df-483f-9d13-1d60c8e84543" />
-
-
-
-
-
-
-
+The local checks in this update validate result processing. They do not provision infrastructure, verify the historical live demo, or rerun cloud inference/training.

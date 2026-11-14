@@ -1,6 +1,6 @@
 # k6 Load Testing
 
-This folder contains simple `k6` scripts for testing the coordinator like a beginner would.
+This folder contains `k6` load scenarios for the coordinator.
 
 The goal is to help you measure:
 
@@ -261,7 +261,7 @@ Then compare:
 4. scaling behavior from GCP dashboards
 5. cost from billing
 
-## Beginner Tip
+## Local validation
 
 Start with:
 
